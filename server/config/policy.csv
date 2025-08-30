@@ -1,0 +1,35 @@
+# Policy Definitions (p, role, plan, resource, action, effect)
+
+# Admin Role: Has access to everything, regardless of plan/domain ('*' matches any domain)
+p, admin, *, *, (read|write|update|delete), allow
+
+# Consumer Role Policies based on Plan (Domain)
+
+# basic: All plans full access
+p, consumer, basic, basic, (read|write|update|delete), allow
+p, consumer, professional, basic, (read|write|update|delete), allow
+p, consumer, business, basic, (read|write|update|delete), allow
+p, consumer, enterprise, basic, (read|write|update|delete), allow
+
+# professional: basic=read only, others=full
+p, consumer, basic, professional, read, allow
+p, consumer, professional, professional, (read|write|update|delete), allow
+p, consumer, business, professional, (read|write|update|delete), allow
+p, consumer, enterprise, professional, (read|write|update|delete), allow
+
+# business: basic=no access, professional=read only, others=full
+# No rule for 'basic' plan on business means no access
+p, consumer, professional, business, read, allow
+p, consumer, business, business, (read|write|update|delete), allow
+p, consumer, enterprise, business, (read|write|update|delete), allow
+
+# enterprise: basic/professional=no access, business=read only, others=full
+# No rule for 'basic' or 'professional' on enterprise means no access
+p, consumer, business, enterprise, read, allow
+p, consumer, enterprise, enterprise, (read|write|update|delete), allow
+
+# Role Assignments (g, role, consumer)
+
+# Example User Assignments
+g, user, consumer
+g, admin, admin

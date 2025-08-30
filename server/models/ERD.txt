@@ -1,0 +1,99 @@
+//// -------------------------------------- ////
+////          Database Design               ////
+////          Technology: MongoDB           ////
+//// -------------------------------------- ////
+
+// Note: This uses dbdiagram.io syntax (relational) to conceptually model a MongoDB (NoSQL) structure.
+// Relationships indicate references via ObjectId, not enforced foreign keys.
+
+Table users as U {
+  _id ObjectId [pk, default: `ObjectId()`, note: "MongoDB primary key"]
+  username varchar [unique, not null]
+  email varchar [unique, not null]
+  password_hash varchar [not null]
+  created_at timestamp [default: `now()`, not null]
+  updated_at timestamp [default: `now()`, not null]
+
+  indexes {
+    (email) [unique]
+    (username) [unique]
+  }
+  note: 'Stores user account information.'
+}
+
+Table projects as P {
+  _id ObjectId [pk, default: `ObjectId()`, note: "MongoDB primary key"]
+  user_id ObjectId [ref: > U._id, not null, note: "Reference to the user who owns the project"]
+  name varchar [not null]
+  description text
+  currency varchar [not null, default: 'USD', note: "e.g., USD, EUR, GBP"]
+  created_at timestamp [default: `now()`, not null]
+  updated_at timestamp [default: `now()`, not null]
+
+  indexes {
+    (user_id) // Query performance for user's projects
+    (user_id, name) // Ensure unique project names per user if needed (app logic)
+  }
+  note: 'Stores financial projects belonging to users.'
+}
+
+Table transactions as T {
+  _id ObjectId [pk, default: `ObjectId()`, note: "MongoDB primary key"]
+  project_id ObjectId [ref: > P._id, not null, note: "Reference to the financial project"]
+  user_id ObjectId [ref: > U._id, not null, note: "Reference to the user (denormalized for easier querying)"]
+  type varchar [not null, note: "'cash_in' or 'cash_out'"]
+  amount double [not null, note: "Use Decimal128 in MongoDB for precise financial calculations if needed"]
+  subcategory varchar [not null]
+  description text
+  transaction_date timestamp [not null, note: "Date the transaction occurred"]
+  created_at timestamp [default: `now()`, not null]
+  updated_at timestamp [default: `now()`, not null]
+
+  indexes {
+    (project_id, transaction_date) // Common query pattern
+    (project_id, type) // For cash in/out totals per project
+    (project_id, subcategory, transaction_date) // For subcategory queries by date
+    (user_id, transaction_date) // For user-level reporting across projects
+    (type)
+    (subcategory)
+    (transaction_date)
+  }
+  note: 'Stores individual cash in and cash out transactions for projects.'
+}
+
+// --- Relationships ---
+// Ref: P.user_id > U._id  // A project belongs to one user
+// Ref: T.project_id > P._id // A transaction belongs to one project
+// Ref: T.user_id > U._id // A transaction belongs to one user (redundant but can optimize queries)
+
+
+// --- Query Support Notes ---
+// 1. Current Balance by Financial Project:
+//    - Requires aggregating transactions for a specific P.project_id.
+//    - Calculation: SUM(T.amount where T.type='cash_in') - SUM(T.amount where T.type='cash_out')
+//    - Supported by: T.project_id, T.type, T.amount
+
+// 2. Total Cash In to Financial Project:
+//    - Requires aggregating transactions for a specific P.project_id where T.type='cash_in'.
+//    - Calculation: SUM(T.amount where T.type='cash_in')
+//    - Supported by: T.project_id, T.type, T.amount
+
+// 3. Total Cash Out from Financial Project:
+//    - Requires aggregating transactions for a specific P.project_id where T.type='cash_out'.
+//    - Calculation: SUM(T.amount where T.type='cash_out')
+//    - Supported by: T.project_id, T.type, T.amount
+
+// 4. Selected Financial Project accumulate sum by subcategory:
+//    - Requires grouping transactions by T.subcategory for a specific P.project_id.
+//    - Calculation: GROUP BY T.subcategory, SUM(T.amount)
+//    - Supported by: T.project_id, T.subcategory, T.amount
+
+// 5. Accumulate sum by subcategory by date range from selected financial projects (Assuming *one* selected project):
+//    - Requires filtering transactions by a specific P.project_id and T.transaction_date range, then grouping by T.subcategory.
+//    - Calculation: Filter by P.project_id, Filter by T.transaction_date >= start_date AND T.transaction_date <= end_date, GROUP BY T.subcategory, SUM(T.amount)
+//    - Supported by: T.project_id, T.transaction_date, T.subcategory, T.amount
+
+// 6. Accumulate sum by subcategory by date range, including multiple financial projects:
+//    - Requires filtering transactions by a list of P.project_id's (using $in operator in MongoDB) and T.transaction_date range, then grouping by T.subcategory.
+//    - Calculation: Filter by P.project_id IN [proj_id1, proj_id2, ...], Filter by T.transaction_date >= start_date AND T.transaction_date <= end_date, GROUP BY T.subcategory, SUM(T.amount)
+//    - Supported by: T.project_id, T.transaction_date, T.subcategory, T.amount
