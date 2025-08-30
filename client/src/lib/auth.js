@@ -228,7 +228,7 @@ async function refreshAccessToken(token) {
             return errorToken;
         }
 
-        // Expect: { accessToken, refreshToken?, expiresAtMs?, expiresInSec? }
+        // Expect: { accessToken, refreshToken?, expiresAtMs?, expiresInSec?, user? }
         const nextAccessToken = data.accessToken;
         if (!nextAccessToken) {
             return {
@@ -240,14 +240,37 @@ async function refreshAccessToken(token) {
 
         const accessTokenExpires = computeAccessTokenExpires(data, nextAccessToken);
 
-        return {
-            ...token,
+        // Explicitly construct the new token to avoid unintended side effects from `...token`
+        const refreshedToken = {
+            // Persist essential properties from the old token
+            id: token.id,
+            username: token.username,
+            email: token.email,
+            role: token.role,
+            profile: token.profile,
+            refreshJitterMs: token.refreshJitterMs,
+            sub: token.sub,
+
+            // Update with new values from the refresh response
             accessToken: nextAccessToken,
             accessTokenExpires,
-            refreshToken: data.refreshToken ?? token.refreshToken, // rotation safe
+            // Make refresh token extraction more robust
+            refreshToken: data.refreshToken ?? data.refresh_token ?? token.refreshToken,
+
+            // Clear any previous errors
             error: undefined,
             refreshError: undefined,
         };
+
+        // If the backend sends an updated user object, incorporate it
+        if (data.user) {
+            refreshedToken.profile = data.user;
+            refreshedToken.username = data.user.username ?? refreshedToken.username;
+            refreshedToken.email = data.user.email ?? refreshedToken.email;
+            refreshedToken.role = data.user.role ?? refreshedToken.role;
+        }
+
+        return refreshedToken;
     } catch (e) {
         return {
             ...token,
