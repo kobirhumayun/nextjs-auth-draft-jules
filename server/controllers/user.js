@@ -81,6 +81,7 @@ const loginUser = async (req, res) => {
         // Passwords match, generate tokens using the instance method
         // This model method also handles subscription checks and saving the refresh token.
         const { accessToken, refreshToken } = await user.generateAccessAndRefereshTokens();
+        await user.save({ validateBeforeSave: false }); // Save the updated user with the new refresh token
 
         res.status(200).json({
             message: 'Login successful.',
@@ -158,7 +159,7 @@ const refreshAccessToken = async (req, res) => {
 
         // HAPPY PATH: The token matches the current one in the DB.
         if (user.refreshToken === incomingRefreshToken) {
-            // Generate new tokens
+            // Generate new tokens. The user instance is updated in memory.
             const { accessToken, refreshToken: newRefreshToken } = await user.generateAccessAndRefereshTokens();
 
             // Add the just-used token to the grace period list
@@ -168,7 +169,9 @@ const refreshAccessToken = async (req, res) => {
                 accessToken
             });
 
-            // Note: The `generateAccessAndRefereshTokens` method should handle saving the newRefreshToken to the user document.
+            // Now, save the user with the new refresh token.
+            await user.save({ validateBeforeSave: false });
+
             console.log('Token sussesfully refreshed:', incomingRefreshToken);
 
             return res.status(200).json({

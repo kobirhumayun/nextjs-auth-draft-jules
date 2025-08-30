@@ -244,7 +244,7 @@ userSchema.methods.generateAccessAndRefereshTokens = async function () {
 
         this.refreshToken = refreshToken;
         // The pre-save hook handles password hashing
-        await this.save();
+        // await this.save(); // The controller will be responsible for saving the user document.
 
         return { accessToken, refreshToken };
     } catch (error) {
