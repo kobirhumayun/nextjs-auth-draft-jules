@@ -337,67 +337,95 @@ export const {
     ],
 
     callbacks: {
-        async jwt({ token, user }) {
-            // Initial sign-in: copy fields from `user`
+        async jwt({ token, user, trigger, session: sessionUpdate }) {
+            // Initial sign-in, `user` object is from `authorize`
             if (user) {
-                token.sub = user.id ?? token.sub;
-                token.id = user.id ?? token.id ?? null;
-                token.username = user.username ?? token.username ?? null;
-                token.email = user.email ?? token.email ?? null;
-                token.role = user.role ?? token.role ?? null;
-
-                token.user = user.profile ?? token.user ?? null;
-                token.accessToken = user.accessToken;
-                token.refreshToken = user.refreshToken;
-                token.accessTokenExpires = user.accessTokenExpires;
-                token.refreshJitterMs = user.refreshJitterMs ?? token.refreshJitterMs ?? 0;
-                token.error = undefined;
-                token.refreshError = undefined;
-                return token;
+                return {
+                    ...token,
+                    id: user.id,
+                    username: user.username,
+                    email: user.email,
+                    role: user.role,
+                    profile: user.profile,
+                    accessToken: user.accessToken,
+                    refreshToken: user.refreshToken,
+                    accessTokenExpires: user.accessTokenExpires,
+                    refreshJitterMs: user.refreshJitterMs,
+                    error: undefined,
+                    refreshError: undefined,
+                };
             }
 
-            // If previously hard-revoked, surface error to client without retry storm.
+            // Client-driven session updates
+            if (trigger === "update" && sessionUpdate) {
+                return { ...token, ...sessionUpdate };
+            }
+
+            // If a hard revoke is pending, don't try to refresh
             if (token?.refreshError?.status === 401 || token?.refreshError?.status === 403) {
                 return token;
             }
 
-            // Refresh shortly before expiry (+ per-user jitter) to avoid races
+            // Refresh if needed
             const jitter = Number(token.refreshJitterMs || 0);
             const expires = Number(token.accessTokenExpires || 0);
-            const needsRefresh = !expires || Date.now() >= (expires - (EARLY_REFRESH_WINDOW_MS + jitter));
+            const needsRefresh = !expires || Date.now() >= expires - (EARLY_REFRESH_WINDOW_MS + jitter);
 
-            if (!needsRefresh) return token;
+            if (!needsRefresh) {
+                return token;
+            }
 
-            // Single-flight: local + distributed (Redis)
+            // Attempt refresh
             try {
-                const refreshed = await getOrCreateRefreshPromise(token, refreshAccessToken);
-                return refreshed;
-            } catch {
-                return { ...token, error: "RefreshAccessTokenError" };
+                // The `token` object is from the DB/session, and `refreshAccessToken` is a
+                // separate function that knows how to call the backend.
+                // We await a promise that is de-duped, first locally, then via Redis.
+                return await getOrCreateRefreshPromise(token, refreshAccessToken);
+            } catch (e) {
+                return {
+                    ...token,
+                    error: "RefreshAccessTokenError",
+                    refreshError: { status: 0, body: { message: `Refresh promise failed: ${e}` } },
+                };
             }
         },
 
         async session({ session, token }) {
-            // Bubble up refresh errors (optional: show a toaster → sign-in)
-            if (token?.error === "RefreshAccessTokenError") {
-                session.error = "RefreshAccessTokenError";
-                session.refreshError = token.refreshError ?? null;
+            // Copy all non-sensitive fields from token to session
+            const {
+                // These are sensitive, don't expose to client
+                refreshToken,
+                accessToken,
+                accessTokenExpires,
+                refreshJitterMs,
+                // These are for error handling
+                error,
+                refreshError,
+                // The rest can be passed to the client
+                ...safeToken
+            } = token;
+
+            // User object for the client
+            session.user = {
+                id: safeToken.id ?? safeToken.sub ?? null,
+                username: safeToken.username,
+                email: safeToken.email,
+                role: safeToken.role,
+                ...safeToken.profile, // includes other user fields
+            };
+
+            // Expose access token details to session
+            session.accessToken = accessToken;
+            session.accessTokenExpires = accessTokenExpires;
+
+            // Bubble up refresh errors
+            if (error) {
+                session.error = error;
+                session.refreshError = refreshError;
             } else {
                 delete session.error;
                 delete session.refreshError;
             }
-
-            // Never expose refreshToken to the client
-            session.user = {
-                id: token.id ?? token.sub ?? null,
-                username: token.username ?? null,
-                email: token.email ?? null,
-                role: token.role ?? null,
-                ...(token.user || {}),
-            };
-
-            session.accessToken = token.accessToken || null;
-            session.accessTokenExpires = token.accessTokenExpires || null;
 
             return session;
         },
