@@ -1,93 +1,59 @@
-'use client';
+import { auth } from '@/lib/auth';
+import { redirect } from 'next/navigation';
 
-import { useState, useEffect } from 'react';
-import { useSession } from 'next-auth/react';
-import { useRouter } from 'next/navigation';
+async function getUserInfo(accessToken) {
+    try {
+        const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/user-info`, {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`,
+            },
+            cache: 'no-store', // Ensure fresh data is fetched on every request
+        });
 
-export default function UserInfoPage() {
-    const { data: session, status } = useSession();
-    const [userInfo, setUserInfo] = useState(null);
-    const [loading, setLoading] = useState(false);
-    const [error, setError] = useState('');
-    const router = useRouter();
-
-    useEffect(() => {
-        // If the session has an error (e.g., RefreshAccessTokenError), it means tokens are invalid.
-        // Redirect the user to the login page to re-authenticate.
-        if (session?.error === 'RefreshAccessTokenError') {
-            router.push('/login?error=SessionExpired');
+        if (!res.ok) {
+            // This error will be caught by the parent component or Next.js error boundary
+            throw new Error('Failed to fetch user info. Status: ' + res.status);
         }
-
-        if (status === 'unauthenticated') {
-            // Should be handled by middleware, but as a fallback:
-            router.push('/login?error=SessionExpired');
-        }
-    }, [session, status, router]);
-
-    const handleFetchUserInfo = async () => {
-        setLoading(true);
-        setError('');
-        setUserInfo(null);
-
-        if (session) {
-            try {
-                const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/api/auth/user-info`, {
-                    headers: {
-                        'Authorization': `Bearer ${session.accessToken}`,
-                    },
-                    cache: 'no-store', // Prevent caching for client-side fetch
-                });
-
-                if (!res.ok) {
-                    // Handle specific error for expired token, though our JWT callback should prevent this.
-                    if (res.status === 401) {
-                        setError("Session expired. Please log in again.");
-                        // The session refresh logic in auth.js should ideally handle this.
-                        // If it still fails, redirecting is a good fallback.
-                        router.push('/login?error=SessionExpired');
-                        return;
-                    }
-                    throw new Error('Failed to fetch user info');
-                }
-
-                const data = await res.json();
-                setUserInfo(data);
-            } catch (err) {
-                setError(err.message);
-            } finally {
-                setLoading(false);
-            }
-        } else {
-            setError("No active session.");
-            setLoading(false);
-        }
-    };
-
-    if (status === 'loading') {
-        return <p className="text-center">Loading session...</p>;
+        return await res.json();
+    } catch (error) {
+        console.error("Error fetching user info:", error);
+        // In a server component, we can't redirect here, but we can return null
+        // and let the page component handle the UI for the error state.
+        return null;
     }
+}
+
+export default async function UserInfoPage() {
+    const session = await auth();
+
+    // Middleware should handle this, but it's good practice for server components too.
+    if (!session) {
+        redirect('/login');
+    }
+
+    // Handle token refresh error case, which the auth() helper populates
+    if (session?.error === "RefreshAccessTokenError") {
+        redirect('/login?error=SessionExpired');
+    }
+
+    // Fetch user info using the (potentially refreshed) access token from the session
+    const userInfo = await getUserInfo(session.accessToken);
 
     return (
         <div className="p-6 bg-white rounded-lg shadow-md">
             <h1 className="text-2xl font-bold mb-4">Welcome, {session?.user?.username}!</h1>
             <p>This is a protected page. Only authenticated users can see this.</p>
+            <p>The user info below is fetched on the server when the page loads.</p>
 
-            <div className="mt-6">
-                <button
-                    onClick={handleFetchUserInfo}
-                    disabled={loading || status !== 'authenticated'}
-                    className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded disabled:bg-blue-300 disabled:cursor-not-allowed"
-                >
-                    {loading ? 'Fetching...' : 'Fetch User Info'}
-                </button>
-            </div>
-
-            {error && <p className="mt-4 text-red-500">{error}</p>}
-
-            {userInfo && (
+            {userInfo ? (
                 <div className="mt-6 p-4 border rounded-lg bg-gray-50">
                     <h2 className="text-xl font-semibold">User Info from API:</h2>
                     <pre className="mt-2 bg-gray-100 p-3 rounded text-sm text-black">{JSON.stringify(userInfo, null, 2)}</pre>
+                </div>
+            ) : (
+                <div className="mt-6 p-4 border rounded-lg bg-red-50 text-red-700">
+                    <h2 className="text-xl font-semibold">Error</h2>
+                    <p>Could not load user information. The session might be invalid or the API server is down.</p>
                 </div>
             )}
         </div>
